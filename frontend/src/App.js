@@ -51,9 +51,17 @@ function App() {
   const logout = () => {
     setToken("");
     localStorage.removeItem("token");
+
+    setEmail("");
+    setPassword("");
     setTasks([]);
+    setTitle("");
+    setDescription("");
+    setEditId(null);
+
     alert("Logged out");
   };
+
 
   const fetchTasks = async () => {
     const res = await fetch(`${API_URL}/api/v1/tasks`, {
