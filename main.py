@@ -2,12 +2,13 @@ import email
 from fastapi import FastAPI, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from database import SessionLocal, engine
-import models, schemas, crud, auth
+from db.database import SessionLocal, engine, Base
+import schemas, core.security
 from fastapi.middleware.cors import CORSMiddleware
+from services import task_services, user_services
+from models import task, user
 
-
-models.Base.metadata.create_all(bind=engine)
+Base.metadata.create_all(bind=engine)
 
 app = FastAPI(title="Backend API")
 app.add_middleware(
@@ -33,22 +34,19 @@ def get_current_user(
 ):
     token = credentials.credentials
 
-# 🔥 FIX: Remove "Bearer " if Swagger sends it
-    if token.startswith("Bearer "):
-        token = token.replace("Bearer ", "")
-
-    payload = auth.decode_token(token)  
+    payload = core.security.decode_token(token)
 
     print("RAW TOKEN:", token)
     print("PAYLOAD:", payload)
 
     if not payload:
         raise HTTPException(status_code=401, detail="Invalid token")
+
     email = payload.get("sub")
     if not email:
         raise HTTPException(status_code=401, detail="Token missing subject")
 
-    user = crud.get_user_by_email(db, payload["sub"])
+    user = user_services.get_user_by_email(db, email)
     print("DB USER:", user)
 
     if not user:
@@ -56,24 +54,25 @@ def get_current_user(
 
     return user
 
+
 @app.post("/register", response_model=schemas.UserOut)
 def register(user: schemas.UserCreate, db: Session = Depends(get_db)):
-    existing = crud.get_user_by_email(db, user.email)
+    existing = user_services.get_user_by_email(db, user.email)
     if existing:
         raise HTTPException(status_code=400, detail="Email already registered")
 
-    return crud.create_user(db, user.email, user.password)
+    return user_services.create_user(db, user.email, user.password)
 
 @app.post("/login")
 def login(user: schemas.UserLogin, db: Session = Depends(get_db)):
-    db_user = crud.get_user_by_email(db, user.email)
+    db_user = user_services.get_user_by_email(db, user.email)
     if not db_user:
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    if not auth.verify_password(user.password, db_user.hashed_password):
+    if not core.security.verify_password(user.password, db_user.hashed_password):
         raise HTTPException(status_code=401, detail="Invalid credentials")
 
-    token = auth.create_access_token({
+    token = core.security.create_access_token({
         "sub": str(db_user.email),
         "role": db_user.role
         })
@@ -91,14 +90,14 @@ def create_task_api(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    return crud.create_task(db, task.title, task.description, current_user.id)
+    return task_services.create_task(db, task.title, task.description, current_user.id)
 
 @app.get("/api/v1/tasks", response_model=list[schemas.TaskOut])
 def get_tasks_api(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    return crud.get_tasks(db)
+    return task_services.get_tasks(db)
 
 @app.put("/api/v1/tasks/{task_id}", response_model=schemas.TaskOut)
 def update_task_api(
@@ -107,7 +106,7 @@ def update_task_api(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    db_task = crud.get_task(db, task_id)
+    db_task = task_services.get_task(db, task_id)
 
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -115,7 +114,7 @@ def update_task_api(
     if db_task.owner_id != current_user.id:
         raise HTTPException(status_code=403, detail="Not your task")
 
-    return crud.update_task(db, task_id, task.title, task.description)
+    return task_services.update_task(db, task_id, task.title, task.description)
 
 @app.delete("/api/v1/tasks/{task_id}")
 def delete_task_api(
@@ -123,7 +122,7 @@ def delete_task_api(
     db: Session = Depends(get_db),
     current_user = Depends(get_current_user)
 ):
-    db_task = crud.get_task(db, task_id)
+    db_task = task_services.get_task(db, task_id)
 
     if not db_task:
         raise HTTPException(status_code=404, detail="Task not found")
@@ -131,11 +130,8 @@ def delete_task_api(
     if current_user.role != "admin":
         raise HTTPException(status_code=403, detail="Admins only")
 
-    crud.delete_task(db, task_id)
+    task_services.delete_task(db, task_id)
     return {"message": "Task deleted"}
 
-@app.get("/debug/users")
-def debug_users(db: Session = Depends(get_db)):
-    return db.query(models.User).all()
 
 
